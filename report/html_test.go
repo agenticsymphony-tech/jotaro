@@ -178,3 +178,34 @@ func TestSeriesChartsWithoutConns(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteHTMLLangAndStartedAt(t *testing.T) {
+	rep := sampleReport(false)
+	rep.StartedAt = time.Date(2026, 3, 4, 14, 6, 7, 0, time.FixedZone("JST", 9*60*60))
+	var buf bytes.Buffer
+	if err := rep.WriteHTML(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		`<html lang="en">`,
+		"<title>jotaro report · 2026-03-04 05:06:07 UTC</title>",
+		`<div class="meta">closed · elapsed `,
+		" · started 2026-03-04 05:06:07 UTC</div>",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q missing from output", want)
+		}
+	}
+	if strings.Contains(out, `lang="ja"`) {
+		t.Error(`the page must not be declared as lang="ja"`)
+	}
+
+	buf.Reset()
+	if err := BuildReport(nil, nil, nil, 0).WriteHTML(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "0001-01-01") || strings.Contains(buf.String(), "started") {
+		t.Error("a zero StartedAt must not be shown")
+	}
+}
