@@ -79,6 +79,41 @@ func TestThresholdString(t *testing.T) {
 	}
 }
 
+func TestThresholdStringRoundTrip(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"p95>0s", "p95>0s"},
+		{"requests>=1234567", "requests>=1234567"},
+		{"rps>12345.6", "rps>12345.6"},
+		{"p95<1500500us", "p95<1.5005s"},
+		{"p95<200ms", "p95<200ms"},
+		{"rps>=100", "rps>=100"},
+		{"error_rate<1%", "error_rate<1%"},
+		{"http_5xx_rate>50%", "http_5xx_rate>50%"},
+		{"error_rate<7%", ""},
+		{"error_rate<0.333", ""},
+		{"error_rate<0.1234567891", ""},
+		{"dropped<0", ""},
+	}
+	for _, tt := range tests {
+		th, err := ParseThreshold(tt.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := th.String()
+		if tt.want != "" && s != tt.want {
+			t.Errorf("%q: String() = %q, want %q", tt.in, s, tt.want)
+		}
+		again, err := ParseThreshold(s)
+		if err != nil {
+			t.Errorf("%q: cannot parse String() = %q: %v", tt.in, s, err)
+			continue
+		}
+		if again != th {
+			t.Errorf("%q: changed in round trip via %q: %+v → %+v", tt.in, s, th, again)
+		}
+	}
+}
+
 // checkReport is a small result with 2 scenarios and 3 steps.
 func checkReport() *Report {
 	ms := time.Millisecond
@@ -285,5 +320,33 @@ func TestCheckIterationLatency(t *testing.T) {
 	empty := BuildReport(nil, nil, nil, time.Second)
 	if r := checkOne(t, empty, "iteration_p95<1s"); r.Pass {
 		t.Errorf("no iterations must not pass: %+v", r)
+	}
+}
+
+func FuzzThresholdRoundTrip(f *testing.F) {
+	for _, s := range []string{"p95>0s", "requests>=1234567", "rps>12345.6", "p95<1500500us", "error_rate<7%", "error_rate<0.333"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		th, err := ParseThreshold(s)
+		if err != nil || th.Value != th.Value || strings.ContainsAny(th.Scenario+th.Step, "{},=<>") {
+			return // not parsed, NaN, or a selector that cannot be written back
+		}
+		again, err := ParseThreshold(th.String())
+		if err != nil {
+			t.Fatalf("%q: cannot parse String() = %q: %v", s, th.String(), err)
+		}
+		if again != th {
+			t.Fatalf("%q: changed in round trip via %q: %+v → %+v", s, th.String(), th, again)
+		}
+	})
+}
+
+func TestChecksPrintCount(t *testing.T) {
+	th, _ := ParseThreshold("requests>=1")
+	var buf bytes.Buffer
+	Checks{{Threshold: th, Actual: 1234567, Pass: true}}.Print(&buf)
+	if !strings.Contains(buf.String(), "actual=1234567") {
+		t.Errorf("count should be shown in full:\n%s", buf.String())
 	}
 }

@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -311,7 +312,7 @@ func parseThresholdValue(kind metricKind, s string) (float64, error) {
 
 // String returns the threshold in a form that ParseThreshold can read.
 func (t Threshold) String() string {
-	return t.label() + t.Op + t.formatValue(t.Value)
+	return t.label() + t.Op + t.canonicalValue(t.Value)
 }
 
 // label is the metric name with its selector ("p95{step=login}").
@@ -329,7 +330,30 @@ func (t Threshold) label() string {
 	return t.Metric + "{" + strings.Join(sel, ",") + "}"
 }
 
-// formatValue shows v in the unit of the threshold's metric, for example "200ms" or "1.5%".
+// canonicalValue writes v exactly, so that parseThresholdValue reads back the same value:
+// time.Duration.String() for durations and the shortest exact decimal for ratios and numbers.
+func (t Threshold) canonicalValue(v float64) string {
+	m, ok := lookupMetric(t.Metric)
+	if !ok {
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	switch m.kind {
+	case kindDuration:
+		return time.Duration(v).String()
+	case kindRatio:
+		// Prefer the percent form when it reads back exactly.
+		for prec := 0; prec <= 15; prec++ {
+			p := strconv.FormatFloat(v*100, 'f', prec, 64)
+			if back, err := strconv.ParseFloat(p, 64); err == nil && back/100 == v {
+				return p + "%"
+			}
+		}
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// formatValue shows v in the unit of the threshold's metric for display, for example "200ms" or "1.5%".
+// It rounds, so use String for a form that can be parsed again.
 func (t Threshold) formatValue(v float64) string {
 	m, ok := lookupMetric(t.Metric)
 	if !ok {
@@ -340,6 +364,18 @@ func (t Threshold) formatValue(v float64) string {
 		return fmtDur(time.Duration(v))
 	case kindRatio:
 		return strconv.FormatFloat(v*100, 'g', 4, 64) + "%"
+	}
+	return formatNumber(v)
+}
+
+// formatNumber shows a count or rate without e-notation: whole numbers in full ("1234567"),
+// large values with one decimal ("12345.6"), and smaller values with 4 significant digits.
+func formatNumber(v float64) string {
+	switch {
+	case v == math.Trunc(v) && math.Abs(v) < 1e15:
+		return strconv.FormatFloat(v, 'f', 0, 64)
+	case math.Abs(v) >= 1000:
+		return strconv.FormatFloat(v, 'f', 1, 64)
 	}
 	return strconv.FormatFloat(v, 'g', 4, 64)
 }
